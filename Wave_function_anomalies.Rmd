@@ -1,0 +1,1137 @@
+---
+title: "Wave function anomalies"
+author: "Anastasios Vlaikidis"
+date: "4/1/2022"
+output: html_document
+---
+
+## Basic libraries
+
+```{r}
+library(tidyverse)
+library(tidymodels)
+library(data.table)
+library(recipes)
+tidymodels_prefer()
+```
+
+## Import data
+
+```{r}
+seed = 43111
+set.seed(seed)
+
+d <-
+  fread("D:/DataAskiseis/New_Disq_Functions/malakas_2.csv",
+           header = F,
+           nrows = 800000,
+           skip = 1700000
+) %>% 
+  rename("Target" = "V113")
+
+d <- 
+  d %>% 
+  select(1:113) %>%
+  mutate(Target = if_else(Target == 0, "Smooth","Anomaly") %>% 
+  as.factor() %>% 
+  relevel(ref = "Smooth"))
+
+d %>% dim()
+d$Target %>% str()
+```
+
+## Sample data
+
+```{r}
+df <-
+  d %>%
+  slice_sample(prop = .003)
+
+df %>% dim()
+```
+
+## Split data into train and test sets
+
+```{r}
+df_split <- 
+  initial_split(
+  
+  df,
+  prop = .75,
+  strata = Target
+  
+)
+
+df_train_original <- training(df_split)
+df_test_original <- testing(df_split)
+
+# shuffle rows mainly required in neural networks
+df_train_original <- df_train_original[sample(1:nrow(df_train_original)),]
+df_test_original <- df_test_original[sample(1:nrow(df_test_original)),]
+
+df_train <- df_train_original
+df_test <- df_test_original
+
+df_train %>% dim()
+df_test %>% dim()
+```
+
+## Basic EDA
+
+```{r}
+df_train %>% dlookr::diagnose()
+df_train %>% dlookr::describe()
+df_train %>% dlookr::diagnose_numeric() 
+
+
+df_train %>%
+  select(Target, V1:V112) %>%
+  pivot_longer(V1:V112) %>%
+  ggplot(aes(value, fill = Target)) +
+  geom_histogram(alpha = 0.9, binwidth = 0.03, position = "identity", col = "white") +
+  facet_wrap(~name, scales = "free") +
+  labs(fill = "Target")
+
+
+df_train %>%
+  select(Target, V1, V29, V57, V85) %>%
+  pivot_longer(V1:V85) %>%
+  ggplot(aes(value, fill = Target)) +
+  geom_histogram(alpha = 0.8, bins = 15, position = "identity", col = "black") +
+  facet_wrap(~name, scales = "free") +
+  labs(fill = "Target")
+
+
+df_train %>%
+  select(Target, V1, V29, V57, V85) %>%
+  pivot_longer(V1:V85) %>%
+  ggplot(aes(value, fill = Target)) +
+  geom_density(alpha = 0.8, position = "identity", col = "black") +
+  facet_wrap(~name, scales = "free") +
+  labs(fill = "Target")
+
+
+df_train %>%
+  select(Target, V1, V29, V57, V85) %>%
+  pivot_longer(V1:V85) %>%
+  ggplot(aes(Target, y = value, fill = Target)) +
+  geom_boxplot(alpha = 0.8, position = "identity") +
+  facet_wrap(~name, scales = "free") +
+  labs(fill = "Target")
+
+
+GGally::ggally_trends(df_train, mapping = aes(x = V1, y = V2, colour = Target))
+GGally::ggally_trends(df_train, mapping = aes(x = V2, y = V3, colour = Target))
+GGally::ggpairs(df_train, columns = 1:6, ggplot2::aes(colour = Target))
+```
+
+## Basic preprocess
+
+```{r}
+basic_rec <-
+   recipe(Target~., data = df_train) %>%
+   step_nzv(all_numeric_predictors()) %>%
+   step_lincomb(all_numeric_predictors()) %>%
+   step_corr(all_numeric_predictors(), threshold = .9) %>%
+   step_YeoJohnson(all_numeric_predictors()) %>%
+   step_normalize(all_numeric_predictors()) %>%
+   step_range(all_numeric_predictors()) 
+
+basic_rec %>% prep() 
+
+# apply the recipe to the train and test data
+df_train <-
+  basic_rec %>%
+  prep() %>%
+  bake(new_data = NULL)
+
+
+df_test <-
+  basic_rec %>%
+  prep() %>%
+  bake(new_data = df_test)
+```
+
+## Dimensonality reduction with h2o autoencoders
+
+### Start h2o cluster
+
+```{r}
+library(h2o)
+h2oInstance <- h2o.init(ip ="localhost", max_mem_size = "6g")
+```
+
+### Build autoencoders
+
+```{r}
+# make train and test data as h2o frames
+trF <- as.h2o(df_train, "trF")
+tsF <- as.h2o(df_test, "tsF")
+
+# Train an autoencoder
+ae1 <- 
+  h2o.deeplearning(
+    
+  x = 1:112,
+  training_frame = trF,
+  autoencoder = TRUE,
+  standardize = T,
+  shuffle_training_data = FALSE,
+  seed = 1821,
+  hidden = c(113,38,38),
+  activation = 'Tanh',
+  sparse = T,
+  epochs = 100,
+  sparsity_beta = 0.01
+  
+)
+
+# autoencoder details
+print(ae1)
+
+# Hyperparameter search grid
+hyper_grid <- list(hidden = list(
+  
+  c(4),
+  c(5),
+  c(6),
+  c(7),
+  c(9),
+  c(10),
+  c(15),
+  c(8),
+  c(12),
+  c(20),
+  c(50),
+  c(38),
+
+  c(8,4),
+  c(38,28),
+  c(38,8,4),
+  c(66,33,16,8,4),
+  
+  c(113,48),
+  c(113,48,48),
+
+  c(113,38),
+  c(113,38,38),
+
+  c(113,28),
+  c(113,28,28),
+
+  c(113,18),
+  c(133,18,18),
+
+  c(113,8),
+  c(113,8,8)
+  
+))
+
+# Execute grid search
+ae_grid <- h2o.grid(
+  algorithm = 'deeplearning',
+  x = 1:112,
+  training_frame = trF,
+  grid_id = 'autoencoder_grid',
+  autoencoder = TRUE,
+  activation = 'Tanh',
+  hyper_params = hyper_grid,
+  sparse = TRUE,
+  ignore_const_cols = FALSE,
+  seed = 1821
+)
+
+# Print grid details
+h2o.getGrid('autoencoder_grid', sort_by = 'mse', decreasing = F)
+
+# Hyperparameter search grid
+hyper_grid <- list(
+  
+  sparsity_beta = c(0.01, 0.05, 0.1, 0.15, 0.2, 0.25, 0.3)
+  
+)
+
+# Execute grid search
+ae_sparsity_grid <- h2o.grid(
+  algorithm = 'deeplearning',
+  x = 1:112,
+  training_frame = trF,
+  grid_id = 'sparsity_grid',
+  autoencoder = TRUE,
+  hidden = c(4),
+  activation = 'Tanh',
+  hyper_params = hyper_grid,
+  sparse = TRUE,
+  average_activation = -0.1,
+  ignore_const_cols = FALSE,
+  seed = 1821
+)
+
+# Print grid details
+h2o.getGrid('sparsity_grid', sort_by = 'mse', decreasing = F)
+```
+
+## Make the new train and test data
+
+```{r}
+# take the desired layer
+num_layer = 2
+
+# train and test data
+df_train_L8 <- h2o.deepfeatures(ae1, trF, layer = num_layer) %>%
+as.data.frame() %>%
+bind_cols(., Target = df_train$Target)
+
+df_test_L8 <- h2o.deepfeatures(ae1, tsF, layer = num_layer) %>%
+as.data.frame() %>%
+bind_cols(., Target = df_test$Target)
+```
+
+## Build a model
+
+### Preprocess
+
+```{r}
+# CV folds
+cv_folds <- vfold_cv(df_train_L8,  strata = "Target" , v = 5)
+
+# basic recipe
+rcp <-recipe(Target ~., data = df_train_L8) 
+```
+
+### The model
+
+```{r}
+# XGBoost model
+xgb_spec <-
+  boost_tree(
+    
+     tree_depth = tune(), 
+     learn_rate = tune(), 
+     loss_reduction = tune(), 
+     min_n = tune(), 
+     sample_size = tune(), 
+     trees = tune(),
+     mtry = tune(),
+     
+) %>%
+  set_engine("xgboost") %>%
+  set_mode("classification")
+
+# workflow
+xgb_wf <- 
+  workflow() %>%
+  add_recipe(rcp) %>%
+  add_model(xgb_spec)
+```
+
+### Tune the model
+
+```{r}
+library(finetune)
+library(lme4)
+
+xgb_rs <- tune_race_anova(
+  
+  xgb_wf,
+  resamples = cv_folds,
+  grid = 25,
+  metrics = metric_set(roc_auc),
+  control = control_race(verbose_elim = TRUE)
+  
+)
+```
+
+### Explore results
+
+```{r}
+(number_of_all_models <- nrow(collect_metrics(xgb_rs, summarize = FALSE)))
+collect_metrics(xgb_rs)
+plot_race(xgb_rs)
+
+
+xgb_rs %>%
+  collect_metrics() %>%
+  filter(.metric == "roc_auc") %>%
+  select(mean, mtry:sample_size) %>%
+  pivot_longer(mtry:sample_size,
+               values_to = "value",
+               names_to = "parameter") %>%
+  ggplot(aes(value , mean, color = parameter))+
+  geom_point(alpha = .8, show.legend = F) +
+  facet_wrap(~parameter, scales = "free_x")+
+  labs(x = NULL, y = "roc_auc")
+```
+
+### Select the best model
+
+```{r}
+best_model <- select_best(xgb_rs, "roc_auc")
+best_model
+
+best_wf <- finalize_workflow(xgb_wf, best_model)
+```
+
+### Fit the model and make predictipns on test set
+
+```{r}
+model <- fit(best_wf, df_train_L8)
+p <- predict(model, df_test_L8)
+caret::confusionMatrix(p$.pred_class, df_test_L8$Target, mode = "everything")
+```
+
+## Load the validation sets
+
+```{r}
+## shock_1
+shock_1 <- fread("D:/DataAskiseis/New_v05/shock1.csv", header = F)
+names(shock_1)[length(shock_1)] <- "Target"
+
+shock_1 <-
+  shock_1 %>%
+  mutate(Target = if_else(Target == 0, "Smooth","Anomaly") %>% 
+  as.factor() %>% 
+  relevel(ref = "Smooth")) %>%
+  as_tibble()
+
+# shock_2
+shock_2 <- fread("D:/DataAskiseis/New_v05/shock2.csv", header = F)
+names(shock_2)[length(shock_2)] <- "Target"
+
+shock_2 <-
+  shock_2 %>%
+  mutate(Target = if_else(Target == 0, "Smooth","Anomaly") %>% 
+  as.factor() %>% 
+  relevel(ref = "Smooth")) %>%
+  as_tibble()
+
+# gausian
+shock_3 <- fread("D:/DataAskiseis/New_v05/gausian.csv", header = F)
+names(shock_3)[length(shock_3)] <- "Target"
+
+shock_3 <-
+  shock_3 %>%
+  mutate(Target = if_else(Target == 0, "Smooth","Anomaly") %>% 
+  as.factor() %>% 
+  relevel(ref = "Smooth")) %>%
+  as_tibble()
+
+shock_3$Target <- factor(shock_3$Target, 
+                         levels = c(levels(shock_3$Target), "Anomaly"))
+
+# shock_4
+shock_4 <- fread("D:/DataAskiseis/New_v05/shock_4.csv", header = F)
+names(shock_4)[length(shock_4)] <- "Target"
+
+shock_4 <-
+  shock_4 %>%
+  mutate(Target = if_else(Target == 0, "Smooth","Anomaly") %>% 
+  as.factor() %>% 
+  relevel(ref = "Smooth")) %>%
+  as_tibble()
+```
+
+### Preprocess
+
+```{r}
+shock_1 <-
+  basic_rec %>%
+  prep() %>%
+  bake(new_data = shock_1) 
+
+shock_2 <-
+  basic_rec %>%
+  prep() %>%
+  bake(new_data = shock_2) 
+
+shock_3 <-
+  basic_rec %>%
+  prep() %>%
+  bake(new_data = shock_3) 
+
+shock_4 <-
+  basic_rec %>%
+  prep() %>%
+  bake(new_data = shock_4) 
+```
+
+### Make them as h2o frames
+
+```{r}
+# split them into predictors and target
+x1 <- shock_1 %>% select(-Target)
+y1 <- shock_1 %>% select(Target)
+
+x2 <- shock_2 %>% select(-Target)
+y2 <- shock_2 %>% select(Target)
+
+x3 <- shock_3 %>% select(-Target)
+y3 <- shock_3 %>% select(Target)
+
+x4 <- shock_4 %>% select(-Target)
+y4 <- shock_4 %>% select(Target)
+
+# h2o frames
+x4 <- as.h2o(x4,"shock_4")
+x1 <- as.h2o(x1,"shock_1")
+x3 <- as.h2o(x3,"shock_3")
+x2 <- as.h2o(x2,"shock_2")
+```
+
+### Make the new validation sets
+
+```{r}
+shock_4 <- h2o.deepfeatures(ae1, x4, layer = num_layer) %>%
+as.data.frame() %>%
+bind_cols(.,Target = y4$Target)
+
+shock_1 <- h2o.deepfeatures(ae1, x1, layer = num_layer) %>%
+as.data.frame() %>%
+bind_cols(.,Target = y1$Target)
+
+shock_3 <- h2o.deepfeatures(ae1, x3, layer = num_layer) %>%
+as.data.frame() %>%
+bind_cols(.,Target = y3$Target)
+
+
+shock_2 <- h2o.deepfeatures(ae1, x2, layer = num_layer) %>%
+as.data.frame() %>%
+bind_cols(.,Target = y2$Target)
+
+h2o.shutdown(prompt = F)
+```
+
+## Predictions on the validation sets
+
+```{r}
+p1 <- predict(model, shock_1)
+caret::confusionMatrix(p1$.pred_class, 
+                       shock_1 %>% pull(Target),
+                       mode = "everything")
+
+p2 <- predict(model, shock_2)
+caret::confusionMatrix(p2$.pred_class, 
+                       shock_2 %>% pull(Target),
+                       mode = "everything")
+
+p3 <- predict(model, shock_3)
+caret::confusionMatrix(p3$.pred_class, 
+                       shock_3 %>% pull(Target),
+                       mode = "everything")
+
+p4 <- predict(model, shock_4)
+caret::confusionMatrix(p4$.pred_class, 
+                       shock_4 %>% pull(Target),
+                       mode = "everything")
+```
+
+## Try different specs
+
+### The models
+
+```{r}
+library(rules)
+library(baguette)
+library(discrim)
+library(kernlab)
+
+
+# logistic reg
+logistic_spec <-
+  logistic_reg(
+    
+   penalty = tune(),
+   mixture = tune()
+    
+) %>%
+  set_engine("glmnet") %>%
+  set_mode("classification")
+
+# quadratic discriminant analysis
+qda_spec <- 
+  discrim_quad() %>%
+  set_mode("classification") %>%
+  set_engine("MASS")
+
+
+# svm radial
+svm_r_spec <-
+   svm_rbf(
+
+     cost = tune(),
+     rbf_sigma = tune()
+
+) %>%
+     set_engine("kernlab") %>%
+     set_mode("classification")
+
+# svm polynomial
+svm_p_spec <- 
+   svm_poly(
+     
+     cost = tune(), 
+     degree = tune()
+     
+) %>% 
+   set_engine("kernlab") %>% 
+   set_mode("classification")
+
+# single layer neural network
+nnet_spec <- 
+   mlp(
+     
+     hidden_units = tune(), 
+     penalty = tune(), 
+     epochs = tune()
+     
+) %>%
+     set_engine("nnet") %>% 
+     set_mode("classification")
+
+
+# random forest
+rf_spec <- 
+   rand_forest(
+     
+     mtry = tune(), 
+     min_n = tune(), 
+     trees = tune()
+     
+) %>% 
+     set_engine("ranger") %>% 
+     set_mode("classification")
+
+# xgb
+xgb_spec <- 
+   boost_tree(
+
+     mtry = tune(),
+     tree_depth = tune(),
+     learn_rate = tune(),
+     loss_reduction = tune(),
+     min_n = tune(),
+     sample_size = tune(),
+     trees = tune()
+    
+) %>% 
+     set_engine("xgboost") %>% 
+     set_mode("classification")
+```
+
+### The workflows
+
+```{r}
+no_pre <- 
+   workflow_set(
+     
+      preproc = list(no_preproc = rcp),
+       models = list(
+        
+            RF = rf_spec,
+            XGB = xgb_spec,
+            NN = nnet_spec,
+            LOG = logistic_spec,
+            QDA = qda_spec,
+            SVMR = svm_r_spec,
+            SVMP = svm_p_spec
+          
+          )
+)
+
+all_workflows <- 
+  bind_rows(
+    
+         no_pre
+    
+)
+
+all_workflows
+```
+
+### Compare the models
+
+```{r}
+race_ctrl <-
+   control_race(
+      
+      save_pred = TRUE,
+      save_workflow = TRUE,
+      verbose_elim = TRUE
+)
+
+
+race_results <-
+   all_workflows %>%
+   workflow_map(
+     
+     "tune_race_anova",
+      seed = 006,
+      resamples = cv_folds,
+      grid = 25,
+      metrics = metric_set(roc_auc),
+      control = race_ctrl
+  
+)
+
+autoplot(
+  
+   race_results,
+   rank_metric = "roc_auc",  
+   metric = "roc_auc",       
+   select_best = TRUE   
+   
+)+ 
+  geom_text(aes( y = mean - 1/2, label = wflow_id), 
+            angle = 90, hjust = 1)+
+  lims(y = c(-0.5, 1))+
+  theme(legend.position = "none")
+
+
+(number_of_all_models <- nrow(collect_metrics(race_results, summarize = FALSE)))
+```
+
+### Best model
+
+```{r}
+best_results <- 
+   race_results %>% 
+   extract_workflow_set_result("no_preproc_RF") %>% # put the best model
+   select_best(metric = "roc_auc")
+
+best_results
+
+best_workflow <- 
+  race_results %>%
+  extract_workflow("no_preproc_RF") %>% # put the best model
+  finalize_workflow(best_results)
+
+best_workflow
+```
+
+### Fit the model and make predictipns on test set
+
+```{r}
+model <- fit(best_workflow, df_train_L8)
+p <- predict(model, df_test_L8)
+caret::confusionMatrix(p$.pred_class, df_test_L8$Target, mode = "everything")
+```
+
+### Predictions on the validation sets
+
+```{r}
+# make predictions
+p1 <- predict(model, shock_1)
+caret::confusionMatrix(p1$.pred_class, 
+                       shock_1 %>% pull(Target),
+                       mode = "everything")
+
+p2 <- predict(model, shock_2)
+caret::confusionMatrix(p2$.pred_class, 
+                       shock_2 %>% pull(Target),
+                       mode = "everything")
+
+p3 <- predict(model, shock_3)
+caret::confusionMatrix(p3$.pred_class, 
+                       shock_3 %>% pull(Target),
+                       mode = "everything")
+
+p4 <- predict(model, shock_4)
+caret::confusionMatrix(p4$.pred_class, 
+                       shock_4 %>% pull(Target),
+                       mode = "everything")
+```
+
+## Model stacking with data derived from Autoencoders reduction method
+
+### Add candidates
+
+```{r}
+library(stacks)
+
+concrete_stack <- 
+  stacks() %>% 
+  add_candidates(race_results)
+
+concrete_stack
+```
+
+### Blend the predictions
+
+```{r}
+ens <- blend_predictions(concrete_stack)
+autoplot(ens)
+
+autoplot(ens, "weights") +
+  geom_text(aes(x = weight + 0.01, label = model), hjust = 0) + 
+  theme(legend.position = "none") +
+  lims(x = c(-1, 6))
+```
+
+### Fit the members and make predictions
+
+```{r}
+ens <- fit_members(ens)
+
+p <- predict(ens, df_test_L8)
+caret::confusionMatrix(p$.pred_class, df_test_L8$Target, mode = "everything")
+
+
+p1 <- predict(ens, shock_1 %>% dplyr::select(-Target))
+caret::confusionMatrix(p1$.pred_class, 
+                       shock_1 %>% pull(Target),
+                       mode = "everything")
+
+
+p2 <- predict(ens, shock_2 %>% dplyr::select(-Target))
+caret::confusionMatrix(p2$.pred_class, 
+                       shock_2 %>% pull(Target),
+                       mode = "everything")
+
+p3 <- predict(ens, shock_3 %>% dplyr::select(-Target))
+caret::confusionMatrix(p3$.pred_class, 
+                       shock_3 %>% pull(Target),
+                       mode = "everything")
+
+p4 <- predict(ens, shock_4 %>% dplyr::select(-Target))
+caret::confusionMatrix(p4$.pred_class, 
+                       shock_4 %>% pull(Target),
+                       mode = "everything")
+
+```
+
+### Meta-learning model with larger penalties and predictions
+
+```{r}
+ens <- blend_predictions(concrete_stack, penalty = 10^seq(-2, -0.5, length = 20))
+autoplot(ens)
+
+autoplot(ens, "weights") +
+  geom_text(aes(x = weight + 0.01, label = model), hjust = 0) + 
+  theme(legend.position = "none") +
+  lims(x = c(-1, 6))
+
+ens <- fit_members(ens)
+
+p <- predict(ens, df_test_L8)
+caret::confusionMatrix(p$.pred_class, df_test_L8$Target, mode = "everything")
+
+p1 <- predict(ens, shock_1 %>% dplyr::select(-Target))
+caret::confusionMatrix(p1$.pred_class, 
+                       shock_1 %>% pull(Target),
+                       mode = "everything")
+
+
+p2 <- predict(ens, shock_2 %>% dplyr::select(-Target))
+caret::confusionMatrix(p2$.pred_class, 
+                       shock_2 %>% pull(Target),
+                       mode = "everything")
+
+p3 <- predict(ens, shock_3 %>% dplyr::select(-Target))
+caret::confusionMatrix(p3$.pred_class, 
+                       shock_3 %>% pull(Target),
+                       mode = "everything")
+
+
+p4 <- predict(ens, shock_4 %>% dplyr::select(-Target))
+caret::confusionMatrix(p4$.pred_class, 
+                       shock_4 %>% pull(Target),
+                       mode = "everything")
+
+```
+
+## Dimensonality reduction with PCA
+
+### Preprocess
+
+```{r}
+# CV folds
+cv_folds <- vfold_cv(df_train_original,  strata = "Target" , v = 5)
+
+pca_rec <- 
+  recipe(Target~., data = df_train_original) %>%
+  step_nzv(all_numeric_predictors()) %>%
+  step_lincomb(all_numeric_predictors()) %>%
+  step_corr(all_numeric_predictors(), threshold = .9) %>%
+  step_YeoJohnson(all_numeric_predictors()) %>%
+  step_normalize(all_numeric_predictors()) %>%
+  step_pca(all_numeric_predictors(), num_comp = 4)
+```
+
+### The workflows
+
+```{r}
+pca <- 
+   workflow_set(
+     
+      preproc = list(pca = pca_rec),
+       models = list(
+        
+            RF = rf_spec,
+            XGB = xgb_spec,
+            NN = nnet_spec,
+            LOG = logistic_spec,
+            QDA = qda_spec,
+            SVMR = svm_r_spec,
+            SVMP = svm_p_spec
+          
+          )
+)
+
+all_workflows <- 
+  bind_rows(
+    
+       pca
+    
+)
+
+all_workflows
+```
+
+### Compare the models
+
+```{r}
+race_ctrl <-
+   control_race(
+      
+      save_pred = TRUE,
+      save_workflow = TRUE,
+      verbose_elim = TRUE
+)
+
+
+race_results <-
+   all_workflows %>%
+   workflow_map(
+     
+     "tune_race_anova",
+      seed = 006,
+      resamples = cv_folds,
+      grid = 25,
+      metrics = metric_set(roc_auc),
+      control = race_ctrl
+  
+)
+
+autoplot(
+  
+   race_results,
+   rank_metric = "roc_auc",  
+   metric = "roc_auc",       
+   select_best = TRUE   
+   
+)+ 
+  geom_text(aes( y = mean - 1/2, label = wflow_id), 
+            angle = 90, hjust = 1)+
+  lims(y = c(-0.5, 1))+
+  theme(legend.position = "none")
+
+
+(number_of_all_models <- nrow(collect_metrics(race_results, summarize = FALSE)))
+```
+
+### Best model
+
+```{r}
+best_results <- 
+   race_results %>% 
+   extract_workflow_set_result("pca_RF") %>% # put the best model
+   select_best(metric = "roc_auc")
+
+best_results
+
+best_workflow <- 
+  race_results %>%
+  extract_workflow("pca_RF") %>% # put the best model
+  finalize_workflow(best_results)
+
+best_workflow
+```
+
+### Fit the model and make predictipns on test set
+
+```{r}
+model <- fit(best_workflow, df_train_original)
+p <- predict(model, df_test_original)
+caret::confusionMatrix(p$.pred_class, df_test_original$Target, mode = "everything")
+```
+
+
+### Load the validation sets
+
+```{r}
+## shock_1
+shock_1 <- fread("D:/DataAskiseis/New_v05/shock1.csv", header = F)
+names(shock_1)[length(shock_1)] <- "Target"
+
+shock_1 <-
+  shock_1 %>%
+  mutate(Target = if_else(Target == 0, "Smooth","Anomaly") %>% 
+  as.factor() %>% 
+  relevel(ref = "Smooth")) %>%
+  as_tibble()
+
+# shock_2
+shock_2 <- fread("D:/DataAskiseis/New_v05/shock2.csv", header = F)
+names(shock_2)[length(shock_2)] <- "Target"
+
+shock_2 <-
+  shock_2 %>%
+  mutate(Target = if_else(Target == 0, "Smooth","Anomaly") %>% 
+  as.factor() %>% 
+  relevel(ref = "Smooth")) %>%
+  as_tibble()
+
+# gausian
+shock_3 <- fread("D:/DataAskiseis/New_v05/gausian.csv", header = F)
+names(shock_3)[length(shock_3)] <- "Target"
+
+shock_3 <-
+  shock_3 %>%
+  mutate(Target = if_else(Target == 0, "Smooth","Anomaly") %>% 
+  as.factor() %>% 
+  relevel(ref = "Smooth")) %>%
+  as_tibble()
+
+shock_3$Target <- factor(shock_3$Target, 
+                         levels = c(levels(shock_3$Target), "Anomaly"))
+
+# shock_4
+shock_4 <- fread("D:/DataAskiseis/New_v05/shock_4.csv", header = F)
+names(shock_4)[length(shock_4)] <- "Target"
+
+shock_4 <-
+  shock_4 %>%
+  mutate(Target = if_else(Target == 0, "Smooth","Anomaly") %>% 
+  as.factor() %>% 
+  relevel(ref = "Smooth")) %>%
+  as_tibble()
+```
+
+### Predictions on the validation sets
+
+```{r}
+# make predictions
+p1 <- predict(model, shock_1)
+caret::confusionMatrix(p1$.pred_class, 
+                       shock_1 %>% pull(Target),
+                       mode = "everything")
+
+p2 <- predict(model, shock_2)
+caret::confusionMatrix(p2$.pred_class, 
+                       shock_2 %>% pull(Target),
+                       mode = "everything")
+
+p3 <- predict(model, shock_3)
+caret::confusionMatrix(p3$.pred_class, 
+                       shock_3 %>% pull(Target),
+                       mode = "everything")
+
+p4 <- predict(model, shock_4)
+caret::confusionMatrix(p4$.pred_class, 
+                       shock_4 %>% pull(Target),
+                       mode = "everything")
+```
+
+## Model stacking with PCA method applied on data
+
+### Add candidates
+
+```{r}
+library(stacks)
+
+concrete_stack <- 
+  stacks() %>% 
+  add_candidates(race_results)
+
+concrete_stack
+```
+
+### Blend the predictions
+
+```{r}
+ens <- blend_predictions(concrete_stack)
+autoplot(ens)
+
+autoplot(ens, "weights") +
+  geom_text(aes(x = weight + 0.01, label = model), hjust = 0) + 
+  theme(legend.position = "none") +
+  lims(x = c(-1, 6))
+```
+
+### Fit the members and make predictions
+
+```{r}
+ens <- fit_members(ens)
+
+p <- predict(ens, df_test_original)
+caret::confusionMatrix(p$.pred_class, df_test_original$Target, mode = "everything")
+
+
+p1 <- predict(ens, shock_1 %>% dplyr::select(-Target))
+caret::confusionMatrix(p1$.pred_class, 
+                       shock_1 %>% pull(Target),
+                       mode = "everything")
+
+
+p2 <- predict(ens, shock_2 %>% dplyr::select(-Target))
+caret::confusionMatrix(p2$.pred_class, 
+                       shock_2 %>% pull(Target),
+                       mode = "everything")
+
+p3 <- predict(ens, shock_3 %>% dplyr::select(-Target))
+caret::confusionMatrix(p3$.pred_class, 
+                       shock_3 %>% pull(Target),
+                       mode = "everything")
+
+p4 <- predict(ens, shock_4 %>% dplyr::select(-Target))
+caret::confusionMatrix(p4$.pred_class, 
+                       shock_4 %>% pull(Target),
+                       mode = "everything")
+
+```
+
+### Meta-learning model with larger penalties and predictions
+
+```{r}
+ens <- blend_predictions(concrete_stack, penalty = 10^seq(-2, -0.5, length = 20))
+autoplot(ens)
+
+autoplot(ens, "weights") +
+  geom_text(aes(x = weight + 0.01, label = model), hjust = 0) + 
+  theme(legend.position = "none") +
+  lims(x = c(-1, 6))
+
+ens <- fit_members(ens)
+
+p <- predict(ens, df_test_original)
+caret::confusionMatrix(p$.pred_class, df_test_original$Target, mode = "everything")
+
+p1 <- predict(ens, shock_1 %>% dplyr::select(-Target))
+caret::confusionMatrix(p1$.pred_class, 
+                       shock_1 %>% pull(Target),
+                       mode = "everything")
+
+
+p2 <- predict(ens, shock_2 %>% dplyr::select(-Target))
+caret::confusionMatrix(p2$.pred_class, 
+                       shock_2 %>% pull(Target),
+                       mode = "everything")
+
+p3 <- predict(ens, shock_3 %>% dplyr::select(-Target))
+caret::confusionMatrix(p3$.pred_class, 
+                       shock_3 %>% pull(Target),
+                       mode = "everything")
+
+
+p4 <- predict(ens, shock_4 %>% dplyr::select(-Target))
+caret::confusionMatrix(p4$.pred_class, 
+                       shock_4 %>% pull(Target),
+                       mode = "everything")
+
+```
+
+## Version check and packages used
+
+```{r}
+devtools::session_info()
+```
