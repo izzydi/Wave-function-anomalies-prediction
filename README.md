@@ -10,7 +10,8 @@ An applied scientific machine-learning project for high-dimensional wave-functio
 
 - [`wave_function_anomaly_detection.Rmd`](wave_function_anomaly_detection.Rmd) — audited R Markdown workflow.
 - [`data/README.md`](data/README.md) — expected source/validation data layout and provenance limitations.
-- [`R-packages.txt`](R-packages.txt) — direct package dependencies.
+- [`R-packages.txt`](R-packages.txt) — version-pinned direct R package dependencies.
+- [`.github/workflows/r-ci.yml`](.github/workflows/r-ci.yml) — R 4.6.1 / Java 17 dependency and syntax CI.
 - [`archive/legacy_wave_function_exploration.Rmd`](archive/legacy_wave_function_exploration.Rmd) — original exploratory source retained for transparency.
 
 The old rendered HTML was removed from the current tree because it no longer represented the audited source. Historical versions remain available through Git history.
@@ -21,6 +22,14 @@ The hold-out test set is untouched while preprocessing and representation learni
 
 Optional validation datasets are transformed using the already-fitted recipe and autoencoder and are not used to refit the pipeline.
 
+## Reproducibility and CI
+
+The direct R package versions are pinned in [`R-packages.txt`](R-packages.txt). GitHub Actions uses R 4.6.1, Java 17 and `pak` to install those exact direct package versions, then extracts and parses the canonical R Markdown source. Java 17 is within the supported range of the pinned H2O release.
+
+The raw source data are not publicly reconstructable from the historical project materials, so CI intentionally validates the environment and source syntax rather than pretending to run the unavailable data-dependent workflow.
+
+`R-packages.txt` pins direct dependencies; it is not a complete `renv.lock` for every recursive package dependency.
+
 ## Methods and tools
 
 The project uses `tidymodels`, `data.table`, H2O deep-learning autoencoders, XGBoost and `caret`. The current bottleneck is four-dimensional, making the learned representation compact enough for downstream classification and inspection.
@@ -28,6 +37,19 @@ The project uses `tidymodels`, `data.table`, H2O deep-learning autoencoders, XGB
 ## Data
 
 Raw data are not committed and the historical source materials do not provide a stable public source/version/checksum. See [`data/README.md`](data/README.md) for the exact expected layout and the reproducibility limitation.
+
+## Running the analysis
+
+1. Install R 4.6.1 and Java 17.
+2. Install `pak` and the pinned direct dependencies:
+
+```r
+install.packages("pak")
+pak::pkg_install(readLines("R-packages.txt"), upgrade = FALSE)
+```
+
+3. Place the source/validation files under `data/` as documented.
+4. Run or knit `wave_function_anomaly_detection.Rmd` from top to bottom.
 
 ## Scope
 
