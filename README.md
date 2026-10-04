@@ -1,31 +1,39 @@
-# Wave-Function Anomaly Prediction
+# Wave-Function Anomaly Detection
 
-A machine-learning project focused on identifying anomalous patterns in high-dimensional wave-function data.
+A scientific machine-learning project focused on identifying anomalous patterns in high-dimensional wave-function data.
 
 ## Project overview
 
-The analysis combines statistical preprocessing and predictive modelling to study unusual wave-function behaviour. The full workflow is available both as R Markdown source and as a rendered HTML report.
+The analysis combines statistical preprocessing, representation learning and predictive modelling to study unusual wave-function behaviour. The full workflow is available as R Markdown source and as a rendered HTML report.
 
-## Repository contents
+## Repository structure
 
-- [`Wave_function_anomalies.Rmd`](Wave_function_anomalies.Rmd) — source analysis.
-- [`Wave_function_anomalies.html`](Wave_function_anomalies.html) — rendered report.
+- [`wave_function_anomaly_detection.Rmd`](wave_function_anomaly_detection.Rmd) — source analysis.
+- [`wave_function_anomaly_detection.html`](wave_function_anomaly_detection.html) — rendered report.
+- [`data/README.md`](data/README.md) — expected local dataset layout.
+- [`.gitignore`](.gitignore) — prevents raw CSV data and local R artifacts from being committed accidentally.
 
-## Project focus
+## Methods
 
-The repository demonstrates an applied anomaly-detection/classification workflow on scientific data, with emphasis on data preparation, exploratory analysis and machine-learning modelling.
+The analysis includes:
 
-## Reproducing the analysis
+- exploratory data analysis,
+- recipe-based preprocessing,
+- correlation and linear-combination filtering,
+- Yeo-Johnson transformation and normalization,
+- H2O autoencoders for learned representations,
+- XGBoost classification,
+- cross-validation and hyperparameter tuning,
+- external validation datasets.
 
-1. Open `Wave_function_anomalies.Rmd` in RStudio.
-2. Install the packages referenced by the document.
-3. Ensure the external source dataset is available at the expected location or update the relevant file path.
-4. Run or knit the document.
+## Reproducibility note
+
+The original 2022 R Markdown workflow contains machine-specific absolute Windows paths from the environment in which it was developed. The original analysis is preserved for transparency. For a portable setup, use the filenames documented in `data/README.md` and replace those absolute imports with project-relative `data/...` paths before running the report.
 
 ## Viewing the report
 
-Download `Wave_function_anomalies.html` and open it locally in a browser, or view it through a compatible HTML preview service.
+Download `wave_function_anomaly_detection.html` and open it locally in a browser, or use a compatible HTML preview service.
 
 ## Scope
 
-This is an experimental scientific machine-learning project and should be interpreted as an analytical demonstration rather than a validated physics simulation or production anomaly-detection system.
+This is an experimental scientific machine-learning portfolio project. It should be interpreted as an analytical demonstration rather than a validated physics simulation or production anomaly-detection system.
