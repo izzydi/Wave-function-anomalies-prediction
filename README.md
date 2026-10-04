@@ -1,11 +1,31 @@
-# Wave-function-anomalies-prediction
+# Wave-Function Anomaly Prediction
 
-use this link to see the html version
-https://htmlpreview.github.io/?https://github.com/izzydi/Wave-function-anomalies-prediction/blob/main/Wave_function_anomalies.html
+A machine-learning project focused on identifying anomalous patterns in high-dimensional wave-function data.
 
+## Project overview
 
-The prediction of wave function anomalies is an interesting and important topic in various fields of physics, such as quantum mechanics and condensed matter physics. Anomalies in the wave function can indicate unexpected or unusual behavior of quantum systems, which can have implications for the development of new materials or the understanding of fundamental physical phenomena.
+The analysis combines statistical preprocessing and predictive modelling to study unusual wave-function behaviour. The full workflow is available both as R Markdown source and as a rendered HTML report.
 
-The prediction of wave function anomalies can be challenging, as it often involves the analysis of complex and high-dimensional data. Machine learning and statistical modeling techniques can be useful in this regard, as they can help identify patterns and relationships in the data that are indicative of anomalous behavior.
+## Repository contents
 
-Overall, the prediction of wave function anomalies is an important and intriguing research topic that can have significant implications for the development of new materials and the understanding of fundamental physical phenomena.
+- [`Wave_function_anomalies.Rmd`](Wave_function_anomalies.Rmd) — source analysis.
+- [`Wave_function_anomalies.html`](Wave_function_anomalies.html) — rendered report.
+
+## Project focus
+
+The repository demonstrates an applied anomaly-detection/classification workflow on scientific data, with emphasis on data preparation, exploratory analysis and machine-learning modelling.
+
+## Reproducing the analysis
+
+1. Open `Wave_function_anomalies.Rmd` in RStudio.
+2. Install the packages referenced by the document.
+3. Ensure the external source dataset is available at the expected location or update the relevant file path.
+4. Run or knit the document.
+
+## Viewing the report
+
+Download `Wave_function_anomalies.html` and open it locally in a browser, or view it through a compatible HTML preview service.
+
+## Scope
+
+This is an experimental scientific machine-learning project and should be interpreted as an analytical demonstration rather than a validated physics simulation or production anomaly-detection system.
