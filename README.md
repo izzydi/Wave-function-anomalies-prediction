@@ -18,13 +18,15 @@ The old rendered HTML was removed from the current tree because it no longer rep
 
 ## Validation design
 
-The hold-out test set is untouched while preprocessing and representation learning are fitted on the training partition. XGBoost cross-validation tunes a classifier on a **fixed representation learned from the training partition**. Because the autoencoder is not re-trained inside each XGBoost fold, those resamples are used for classifier hyperparameter selection rather than reported as an unbiased end-to-end performance estimate. The untouched held-out test set is the primary evaluation set.
+The hold-out test set is untouched while preprocessing and representation learning are fitted on the training partition. The downstream XGBoost classifier uses a **fixed, pre-specified baseline configuration**, rather than tuning hyperparameters with classifier cross-validation on a representation already learned from the complete outer training partition. This removes the earlier validation-boundary mismatch. The untouched held-out test set is the only performance-evaluation set.
 
-Optional validation datasets are transformed using the already-fitted recipe and autoencoder and are not used to refit the pipeline.
+Optional validation datasets are transformed using the already-fitted recipe, autoencoder and classifier and are not used to refit any part of the pipeline.
 
 ## Reproducibility and CI
 
 The direct R package versions are pinned in [`R-packages.txt`](R-packages.txt). GitHub Actions uses R 4.6.1, Java 17 and `pak` to install those exact direct package versions, then extracts and parses the canonical R Markdown source. Java 17 is within the supported range of the pinned H2O release.
+
+The H2O autoencoder requests reproducible mode with a fixed seed. The downstream XGBoost baseline is also fixed-seed and single-threaded to reduce run-to-run variation.
 
 The raw source data are not publicly reconstructable from the historical project materials, so CI intentionally validates the environment and source syntax rather than pretending to run the unavailable data-dependent workflow.
 
@@ -53,4 +55,4 @@ pak::pkg_install(readLines("R-packages.txt"), upgrade = FALSE)
 
 ## Scope
 
-This is a scientific machine-learning portfolio project. It demonstrates explicit train/test boundaries and train-derived representation learning; it is not a deployed production inference system.
+This is a scientific machine-learning portfolio project. It demonstrates explicit train/test boundaries, train-derived representation learning and a deliberately fixed downstream baseline; it is not a deployed production inference system.
