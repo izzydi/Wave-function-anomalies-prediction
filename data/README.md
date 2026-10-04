@@ -1,15 +1,21 @@
 # Data directory
 
-The raw wave-function datasets are intentionally not committed to this repository.
+The raw wave-function datasets are not committed to this repository.
 
-The original R Markdown analysis was created with machine-specific absolute Windows paths. For a portable local setup, place the source files in this directory and update the import paths in the analysis to use project-relative paths.
+The audited workflow already uses project-relative paths. Expected layout:
 
-Suggested filenames:
+```text
+data/
+├── wave_functions.csv
+└── validation/          # optional
+    ├── shock_1.csv
+    ├── shock_2.csv
+    ├── gaussian.csv
+    └── shock_4.csv
+```
 
-- `wave_functions.csv` — primary training source.
-- `shock_1.csv` — external validation set 1.
-- `shock_2.csv` — external validation set 2.
-- `gaussian.csv` — Gaussian validation set.
-- `shock_4.csv` — external validation set 4.
+The primary dataset must contain at least 113 columns; the first 112 are predictors and column 113 is the target. Validation files use the same schema.
 
-Raw data files are excluded by `.gitignore` so large or non-public datasets are not accidentally committed.
+The archived 2022 source shows that the original primary file was read from a machine-specific local path and does not provide a stable public source/version/checksum. The cleaned repository therefore does **not** claim that the raw data can be reconstructed from a public download. Use the exact original data where available and record its provenance/checksum for any reproduced metrics.
+
+Raw data files remain excluded by `.gitignore` so large or non-public datasets are not accidentally committed.
