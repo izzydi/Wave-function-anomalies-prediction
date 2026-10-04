@@ -1,0 +1,238 @@
+---
+title: "Wave-Function Anomaly Detection"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(tidyverse)
+library(tidymodels)
+library(data.table)
+library(h2o)
+library(caret)
+tidymodels_prefer()
+```
+
+## Data import
+
+The audited workflow uses project-relative paths. See `data/README.md` for the expected layout.
+
+```{r}
+seed <- 43111
+set.seed(seed)
+
+data_path <- file.path("data", "wave_functions.csv")
+if (!file.exists(data_path)) {
+  stop("Missing data/wave_functions.csv. See data/README.md for the expected layout.")
+}
+
+d <- fread(
+  data_path,
+  header = FALSE,
+  nrows = 800000,
+  skip = 1700000
+) %>%
+  select(1:113) %>%
+  rename(Target = V113) %>%
+  mutate(
+    Target = factor(
+      if_else(Target == 0, "Smooth", "Anomaly"),
+      levels = c("Anomaly", "Smooth")
+    )
+  ) %>%
+  as_tibble()
+
+if (ncol(d) != 113) {
+  stop("Expected 112 predictors plus one target column.")
+}
+```
+
+## Sampling and hold-out split
+
+```{r}
+set.seed(seed)
+df <- d %>% slice_sample(prop = 0.003)
+
+set.seed(seed)
+df_split <- initial_split(df, prop = 0.75, strata = Target)
+df_train_raw <- training(df_split)
+df_test_raw <- testing(df_split)
+```
+
+## Training-only preprocessing
+
+All data-dependent preprocessing is learned from the training partition once. The fitted recipe is then reused unchanged on test and validation data.
+
+```{r}
+preprocess_recipe <- recipe(Target ~ ., data = df_train_raw) %>%
+  step_nzv(all_numeric_predictors()) %>%
+  step_lincomb(all_numeric_predictors()) %>%
+  step_corr(all_numeric_predictors(), threshold = 0.90) %>%
+  step_YeoJohnson(all_numeric_predictors()) %>%
+  step_normalize(all_numeric_predictors())
+
+preprocess_fit <- prep(preprocess_recipe, training = df_train_raw)
+df_train <- bake(preprocess_fit, new_data = NULL)
+df_test <- bake(preprocess_fit, new_data = df_test_raw)
+```
+
+## H2O autoencoder
+
+The target remains in the frame for bookkeeping but is excluded explicitly from the autoencoder predictors by name.
+
+```{r}
+h2o_instance <- h2o.init(max_mem_size = "6g")
+
+train_h2o <- as.h2o(df_train, destination_frame = "wave_train")
+test_h2o <- as.h2o(df_test, destination_frame = "wave_test")
+predictor_columns <- setdiff(names(train_h2o), "Target")
+
+if (length(predictor_columns) < 2) {
+  stop("Preprocessing left too few predictors for representation learning.")
+}
+
+autoencoder <- h2o.deeplearning(
+  x = predictor_columns,
+  training_frame = train_h2o,
+  autoencoder = TRUE,
+  standardize = FALSE,
+  shuffle_training_data = FALSE,
+  seed = seed,
+  hidden = c(64, 16, 4),
+  activation = "Tanh",
+  sparse = TRUE,
+  sparsity_beta = 0.01,
+  epochs = 100
+)
+
+print(autoencoder)
+```
+
+## Learned representations
+
+The final hidden layer is a four-dimensional bottleneck.
+
+```{r}
+train_embedding <- h2o.deepfeatures(autoencoder, train_h2o, layer = 3) %>%
+  as.data.frame() %>%
+  bind_cols(Target = df_train$Target)
+
+test_embedding <- h2o.deepfeatures(autoencoder, test_h2o, layer = 3) %>%
+  as.data.frame() %>%
+  bind_cols(Target = df_test$Target)
+```
+
+## XGBoost classifier
+
+Cross-validation tunes XGBoost on a fixed representation learned from the training partition. The untouched test partition is reserved for final evaluation.
+
+```{r}
+set.seed(seed)
+cv_folds <- vfold_cv(train_embedding, v = 5, strata = Target)
+
+xgb_spec <- boost_tree(
+  trees = tune(),
+  tree_depth = tune(),
+  learn_rate = tune(),
+  loss_reduction = tune(),
+  min_n = tune(),
+  sample_size = tune(),
+  mtry = tune()
+) %>%
+  set_engine("xgboost") %>%
+  set_mode("classification")
+
+xgb_workflow <- workflow() %>%
+  add_recipe(recipe(Target ~ ., data = train_embedding)) %>%
+  add_model(xgb_spec)
+
+set.seed(seed)
+xgb_tuning <- tune_grid(
+  xgb_workflow,
+  resamples = cv_folds,
+  grid = 12,
+  metrics = metric_set(roc_auc, accuracy)
+)
+
+best_params <- select_best(xgb_tuning, metric = "roc_auc")
+final_workflow <- finalize_workflow(xgb_workflow, best_params)
+final_model <- fit(final_workflow, data = train_embedding)
+```
+
+## Held-out evaluation
+
+```{r}
+test_predictions <- predict(final_model, test_embedding)
+
+caret::confusionMatrix(
+  test_predictions$.pred_class,
+  test_embedding$Target,
+  mode = "everything"
+)
+```
+
+## Optional external validation
+
+Any CSV files under `data/validation/` are processed using the already-fitted recipe, autoencoder and classifier. Validation data are never used to refit preprocessing or representation learning.
+
+```{r}
+validation_dir <- file.path("data", "validation")
+
+if (dir.exists(validation_dir)) {
+  validation_files <- list.files(validation_dir, pattern = "\\.csv$", full.names = TRUE)
+
+  for (validation_path in validation_files) {
+    validation_raw <- fread(validation_path, header = FALSE)
+
+    if (ncol(validation_raw) < 113) {
+      warning(sprintf("Skipping %s: fewer than 113 columns.", validation_path))
+      next
+    }
+
+    validation_raw <- validation_raw[, 1:113]
+    names(validation_raw)[113] <- "Target"
+    validation_raw <- validation_raw %>%
+      mutate(
+        Target = factor(
+          if_else(Target == 0, "Smooth", "Anomaly"),
+          levels = levels(df_train_raw$Target)
+        )
+      ) %>%
+      as_tibble()
+
+    validation_processed <- bake(preprocess_fit, new_data = validation_raw)
+    validation_x <- validation_processed %>% select(-Target)
+    validation_h2o <- as.h2o(validation_x)
+
+    validation_embedding <- h2o.deepfeatures(
+      autoencoder,
+      validation_h2o,
+      layer = 3
+    ) %>%
+      as.data.frame() %>%
+      bind_cols(Target = validation_processed$Target)
+
+    validation_predictions <- predict(final_model, validation_embedding)
+
+    print(basename(validation_path))
+    print(
+      caret::confusionMatrix(
+        validation_predictions$.pred_class,
+        validation_embedding$Target,
+        mode = "everything"
+      )
+    )
+  }
+}
+```
+
+## Shut down H2O
+
+```{r}
+h2o.shutdown(prompt = FALSE)
+```
+
+## Session information
+
+```{r}
+sessionInfo()
+```
