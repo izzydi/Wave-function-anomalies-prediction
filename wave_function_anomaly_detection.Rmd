@@ -77,7 +77,7 @@ df_test <- bake(preprocess_fit, new_data = df_test_raw)
 
 ## H2O autoencoder
 
-The target remains in the frame for bookkeeping but is excluded explicitly from the autoencoder predictors by name.
+The target remains in the frame for bookkeeping but is excluded explicitly from the autoencoder predictors by name. The autoencoder configuration is fixed before held-out evaluation.
 
 ```{r}
 h2o_instance <- h2o.init(max_mem_size = "6g")
@@ -96,6 +96,7 @@ autoencoder <- h2o.deeplearning(
   autoencoder = TRUE,
   standardize = FALSE,
   shuffle_training_data = FALSE,
+  reproducible = TRUE,
   seed = seed,
   hidden = c(64, 16, 4),
   activation = "Tanh",
@@ -109,7 +110,7 @@ print(autoencoder)
 
 ## Learned representations
 
-The final hidden layer is a four-dimensional bottleneck.
+The final hidden layer is a four-dimensional bottleneck. It is learned from the outer training partition only; held-out test rows are transformed by the already-fitted autoencoder.
 
 ```{r}
 train_embedding <- h2o.deepfeatures(autoencoder, train_h2o, layer = 3) %>%
@@ -121,24 +122,23 @@ test_embedding <- h2o.deepfeatures(autoencoder, test_h2o, layer = 3) %>%
   bind_cols(Target = df_test$Target)
 ```
 
-## XGBoost classifier
+## Fixed XGBoost baseline
 
-Cross-validation tunes XGBoost on a fixed representation learned from the training partition. The untouched test partition is reserved for final evaluation.
+The downstream classifier uses a deliberately **fixed, pre-specified configuration**. Hyperparameters are not tuned with cross-validation on an embedding learned from all outer-training rows, avoiding the earlier mismatch where classifier validation folds had already influenced unsupervised preprocessing and representation learning. The held-out test partition is the only performance-evaluation set.
 
 ```{r}
-set.seed(seed)
-cv_folds <- vfold_cv(train_embedding, v = 5, strata = Target)
+embedding_predictors <- ncol(train_embedding) - 1L
 
 xgb_spec <- boost_tree(
-  trees = tune(),
-  tree_depth = tune(),
-  learn_rate = tune(),
-  loss_reduction = tune(),
-  min_n = tune(),
-  sample_size = tune(),
-  mtry = tune()
+  trees = 500,
+  tree_depth = 4,
+  learn_rate = 0.05,
+  loss_reduction = 0,
+  min_n = 5,
+  sample_size = 0.80,
+  mtry = embedding_predictors
 ) %>%
-  set_engine("xgboost") %>%
+  set_engine("xgboost", nthread = 1, seed = seed) %>%
   set_mode("classification")
 
 xgb_workflow <- workflow() %>%
@@ -146,16 +146,7 @@ xgb_workflow <- workflow() %>%
   add_model(xgb_spec)
 
 set.seed(seed)
-xgb_tuning <- tune_grid(
-  xgb_workflow,
-  resamples = cv_folds,
-  grid = 12,
-  metrics = metric_set(roc_auc, accuracy)
-)
-
-best_params <- select_best(xgb_tuning, metric = "roc_auc")
-final_workflow <- finalize_workflow(xgb_workflow, best_params)
-final_model <- fit(final_workflow, data = train_embedding)
+final_model <- fit(xgb_workflow, data = train_embedding)
 ```
 
 ## Held-out evaluation
@@ -172,7 +163,7 @@ caret::confusionMatrix(
 
 ## Optional external validation
 
-Any CSV files under `data/validation/` are processed using the already-fitted recipe, autoencoder and classifier. Validation data are never used to refit preprocessing or representation learning.
+Any CSV files under `data/validation/` are processed using the already-fitted recipe, autoencoder and classifier. Validation data are never used to refit preprocessing, representation learning or the classifier.
 
 ```{r}
 validation_dir <- file.path("data", "validation")
