@@ -1,39 +1,31 @@
 # Wave-Function Anomaly Detection
 
-A scientific machine-learning project focused on identifying anomalous patterns in high-dimensional wave-function data.
+An applied scientific machine-learning project for high-dimensional wave-function data, combining **training-only preprocessing, H2O autoencoder representation learning and XGBoost classification**.
 
-## Project overview
+## Primary workflow
 
-The analysis combines statistical preprocessing, representation learning and predictive modelling to study unusual wave-function behaviour. The full workflow is available as R Markdown source and as a rendered HTML report.
+[`wave_function_anomaly_detection.Rmd`](wave_function_anomaly_detection.Rmd) is the audited source. It uses project-relative data paths, creates a stratified hold-out set before learned preprocessing, fits one preprocessing recipe on training data only, selects H2O predictors by name rather than fragile column positions, and reuses the trained pipeline for optional external validation.
 
 ## Repository structure
 
-- [`wave_function_anomaly_detection.Rmd`](wave_function_anomaly_detection.Rmd) — source analysis.
-- [`wave_function_anomaly_detection.html`](wave_function_anomaly_detection.html) — rendered report.
-- [`data/README.md`](data/README.md) — expected local dataset layout.
-- [`.gitignore`](.gitignore) — prevents raw CSV data and local R artifacts from being committed accidentally.
+- [`wave_function_anomaly_detection.Rmd`](wave_function_anomaly_detection.Rmd) — audited R Markdown workflow.
+- [`data/README.md`](data/README.md) — expected source/validation data layout.
+- [`R-packages.txt`](R-packages.txt) — direct package dependencies.
+- [`archive/legacy_wave_function_exploration.Rmd`](archive/legacy_wave_function_exploration.Rmd) — original exploratory source retained for transparency.
+- [`wave_function_anomaly_detection.html`](wave_function_anomaly_detection.html) — historical rendered report; it may not reflect the current audited source.
 
-## Methods
+## Validation design
 
-The analysis includes:
+The hold-out test set is untouched while preprocessing and representation learning are fitted on the training partition. XGBoost cross-validation tunes a classifier on the fixed train-derived representation; the hold-out test set is therefore the main unbiased evaluation set. Optional validation datasets are transformed using the already-fitted recipe and autoencoder and are not used to refit the pipeline.
 
-- exploratory data analysis,
-- recipe-based preprocessing,
-- correlation and linear-combination filtering,
-- Yeo-Johnson transformation and normalization,
-- H2O autoencoders for learned representations,
-- XGBoost classification,
-- cross-validation and hyperparameter tuning,
-- external validation datasets.
+## Methods and tools
 
-## Reproducibility note
+The project uses `tidymodels`, `data.table`, H2O deep-learning autoencoders, XGBoost and `caret`. The current bottleneck is four-dimensional, making the learned representation compact enough for downstream classification and inspection.
 
-The original 2022 R Markdown workflow contains machine-specific absolute Windows paths from the environment in which it was developed. The original analysis is preserved for transparency. For a portable setup, use the filenames documented in `data/README.md` and replace those absolute imports with project-relative `data/...` paths before running the report.
+## Data
 
-## Viewing the report
-
-Download `wave_function_anomaly_detection.html` and open it locally in a browser, or use a compatible HTML preview service.
+Raw data are not committed. See [`data/README.md`](data/README.md) for the expected layout.
 
 ## Scope
 
-This is an experimental scientific machine-learning portfolio project. It should be interpreted as an analytical demonstration rather than a validated physics simulation or production anomaly-detection system.
+This is a scientific machine-learning portfolio project. It demonstrates reproducible representation learning and anomaly-oriented classification; it is not a deployed production inference system.
